@@ -3,9 +3,12 @@ import cookie from "@fastify/cookie";
 import Fastify, { type FastifyInstance } from "fastify";
 import { loadConfig, type RuntimeConfig } from "./config.js";
 import { registerAuthPlugin } from "./auth/auth-plugin.js";
+import { registerAdminRoutes } from "./routes/admin.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerCategoryRoutes } from "./routes/categories.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerModerationRoutes } from "./routes/moderation.js";
+import { registerRoomRoutes } from "./routes/rooms.js";
 import { registerUserRoutes } from "./routes/users.js";
 
 type BuildServerOptions = {
@@ -58,6 +61,9 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   registerAuthRoutes(app, config);
   registerUserRoutes(app);
   registerCategoryRoutes(app);
+  registerRoomRoutes(app, config);
+  registerModerationRoutes(app);
+  registerAdminRoutes(app);
 
   return app;
 }

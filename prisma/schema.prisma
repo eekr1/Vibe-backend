@@ -19,17 +19,87 @@ enum UserRole {
   admin
 }
 
+enum RoomState {
+  live
+  ended
+  deleted
+}
+
+enum RoomVisibility {
+  public
+  private
+}
+
+enum MediaSourceProvider {
+  youtube
+}
+
+enum RoomParticipantRole {
+  host
+  participant
+}
+
+enum RoomParticipantState {
+  active
+  left
+  kicked
+  banned
+}
+
+enum MessageState {
+  visible
+  hidden
+  deleted
+}
+
+enum ModerationActionType {
+  kick
+  ban
+}
+
+enum ReportTargetType {
+  room
+  user
+  message
+}
+
+enum ReportReason {
+  harassment
+  hate_speech
+  spam
+  inappropriate_room_title
+  abusive_behavior
+  harmful_content
+  impersonation
+  other
+}
+
+enum ReportStatus {
+  open
+  reviewed
+  action_taken
+  dismissed
+  escalated
+}
+
 model User {
-  id           String       @id @default(cuid())
-  email        String       @unique
-  username     String       @unique
-  displayName  String
-  avatarUrl    String?
-  passwordHash String
-  accountState AccountState @default(active)
-  role         UserRole     @default(member)
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  id                           String             @id @default(cuid())
+  email                        String             @unique
+  username                     String             @unique
+  displayName                  String
+  avatarUrl                    String?
+  passwordHash                 String
+  accountState                 AccountState       @default(active)
+  role                         UserRole           @default(member)
+  createdAt                    DateTime           @default(now())
+  updatedAt                    DateTime           @updatedAt
+  hostedRooms                  Room[]
+  messages                     Message[]
+  moderationActionsAuthored    ModerationAction[] @relation("moderation_action_actor")
+  moderationActionsReceived    ModerationAction[] @relation("moderation_action_target")
+  participants                 RoomParticipant[]
+  reportsMade                  Report[]           @relation("report_reporter")
+  reportsTargetingUser         Report[]           @relation("report_target_user")
 
   @@index([accountState])
   @@index([role])
@@ -44,7 +114,120 @@ model Category {
   sortOrder Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  rooms     Room[]
 
   @@index([isActive, sortOrder])
   @@map("categories")
+}
+
+model Room {
+  id                  String              @id @default(cuid())
+  slug                String              @unique
+  title               String
+  hostUserId          String
+  categoryId          String
+  sourceProvider      MediaSourceProvider @default(youtube)
+  sourceUrl           String
+  sourceVideoId       String
+  sourceTitle         String?
+  sourceThumbnailUrl  String?
+  visibility          RoomVisibility
+  privatePasswordHash String?
+  participantLimit    Int
+  state               RoomState           @default(live)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  endedAt             DateTime?
+  category            Category            @relation(fields: [categoryId], references: [id])
+  host                User                @relation(fields: [hostUserId], references: [id])
+  messages            Message[]
+  moderationActions   ModerationAction[]
+  participants        RoomParticipant[]
+  reports             Report[]
+
+  @@index([categoryId, state, visibility])
+  @@index([createdAt])
+  @@index([hostUserId, state])
+  @@index([state, visibility])
+  @@map("rooms")
+}
+
+model RoomParticipant {
+  id       String               @id @default(cuid())
+  roomId   String
+  userId   String
+  role     RoomParticipantRole  @default(participant)
+  state    RoomParticipantState @default(active)
+  joinedAt DateTime             @default(now())
+  leftAt   DateTime?
+  room     Room                 @relation(fields: [roomId], references: [id])
+  user     User                 @relation(fields: [userId], references: [id])
+
+  @@unique([roomId, userId])
+  @@index([roomId, state])
+  @@index([userId, state])
+  @@map("room_participants")
+}
+
+model Message {
+  id        String       @id @default(cuid())
+  roomId    String
+  userId    String
+  body      String
+  state     MessageState @default(visible)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  room      Room         @relation(fields: [roomId], references: [id])
+  reports   Report[]
+  user      User         @relation(fields: [userId], references: [id])
+
+  @@index([roomId, createdAt])
+  @@index([userId, createdAt])
+  @@map("messages")
+}
+
+model ModerationAction {
+  id           String               @id @default(cuid())
+  roomId       String
+  actorUserId  String
+  targetUserId String
+  actionType   ModerationActionType
+  reason       String?
+  createdAt    DateTime             @default(now())
+  actor        User                 @relation("moderation_action_actor", fields: [actorUserId], references: [id])
+  room         Room                 @relation(fields: [roomId], references: [id])
+  target       User                 @relation("moderation_action_target", fields: [targetUserId], references: [id])
+
+  @@index([roomId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([targetUserId, createdAt])
+  @@map("moderation_actions")
+}
+
+model Report {
+  id             String           @id @default(cuid())
+  reporterUserId String
+  targetType     ReportTargetType
+  targetId       String
+  targetUserId   String?
+  roomId         String?
+  messageId      String?
+  reason         ReportReason
+  details        String?
+  status         ReportStatus     @default(open)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  reviewedAt     DateTime?
+  message        Message?         @relation(fields: [messageId], references: [id])
+  reporter       User             @relation("report_reporter", fields: [reporterUserId], references: [id])
+  room           Room?            @relation(fields: [roomId], references: [id])
+  targetUser     User?            @relation("report_target_user", fields: [targetUserId], references: [id])
+
+  @@index([createdAt])
+  @@index([reporterUserId, createdAt])
+  @@index([roomId, createdAt])
+  @@index([status, createdAt])
+  @@index([targetType, targetId])
+  @@index([targetUserId, createdAt])
+  @@map("reports")
 }
