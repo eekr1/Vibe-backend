@@ -36,7 +36,7 @@ function setSessionCookie(reply: FastifyReply, token: string, config: RuntimeCon
     httpOnly: true,
     maxAge: getSessionMaxAgeSeconds(),
     path: "/",
-    sameSite: "lax",
+    sameSite: config.nodeEnv === "production" ? "none" : "lax",
     secure: config.nodeEnv === "production"
   });
 }
@@ -45,7 +45,7 @@ function clearSessionCookie(reply: FastifyReply, config: RuntimeConfig) {
   reply.clearCookie(AUTH_COOKIE_NAME, {
     httpOnly: true,
     path: "/",
-    sameSite: "lax",
+    sameSite: config.nodeEnv === "production" ? "none" : "lax",
     secure: config.nodeEnv === "production"
   });
 }
