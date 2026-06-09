@@ -27,6 +27,11 @@ const moderationListQuerySchema = listQuerySchema.extend({
   actionType: z.enum(["kick", "ban"]).optional()
 });
 
+const adminBootstrapSchema = z.object({
+  emailOrUsername: z.string().trim().min(3).max(120),
+  secret: z.string().min(16).max(256)
+});
+
 const userParamsSchema = z.object({
   userId: z.string().trim().min(1)
 });
@@ -312,6 +317,62 @@ function toAdminModerationAction(action: {
 
 export function registerAdminRoutes(app: FastifyInstance) {
   const adminOnly = { preHandler: [app.authenticate, requireAdmin] };
+
+  app.post("/api/admin/bootstrap", async (request, reply) => {
+    const configuredSecret = process.env.ADMIN_BOOTSTRAP_SECRET;
+
+    if (!configuredSecret) {
+      request.log.warn("Admin bootstrap attempted while ADMIN_BOOTSTRAP_SECRET is not configured");
+      return sendError(reply, 404, "NOT_FOUND", "Admin bootstrap is not available.");
+    }
+
+    const parsed = adminBootstrapSchema.safeParse(request.body);
+
+    if (!parsed.success) {
+      return sendError(reply, 400, "VALIDATION_FAILED", "Invalid admin bootstrap fields.", parsed.error.issues);
+    }
+
+    if (parsed.data.secret !== configuredSecret) {
+      request.log.warn({ emailOrUsername: parsed.data.emailOrUsername }, "Admin bootstrap secret rejected");
+      return sendError(reply, 403, "FORBIDDEN", "Admin bootstrap secret is invalid.");
+    }
+
+    const lookup = parsed.data.emailOrUsername.toLowerCase();
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [{ email: lookup }, { username: lookup }]
+      }
+    });
+
+    if (!user) {
+      return sendError(reply, 404, "NOT_FOUND", "User not found.");
+    }
+
+    const adminUser = await prisma.user.update({
+      data: {
+        accountState: "active",
+        role: "admin"
+      },
+      include: {
+        _count: {
+          select: {
+            hostedRooms: true,
+            messages: true,
+            moderationActionsAuthored: true,
+            moderationActionsReceived: true,
+            participants: true,
+            reportsMade: true,
+            reportsTargetingUser: true
+          }
+        }
+      },
+      where: { id: user.id }
+    });
+
+    request.log.info({ userId: adminUser.id }, "Admin bootstrap completed");
+
+    return sendOk(reply, { user: toAdminUser(adminUser) });
+  });
 
   app.get("/api/admin/overview", adminOnly, async (request, reply) => {
     const [
