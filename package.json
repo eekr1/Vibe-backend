@@ -6,10 +6,13 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "db:prepare": "node scripts/prepare-database.mjs",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
+    "render:build": "prisma generate && tsc -p tsconfig.json",
+    "render:start": "node scripts/prepare-database.mjs && node dist/index.js",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
