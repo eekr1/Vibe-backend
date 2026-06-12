@@ -24,8 +24,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
 
   await app.register(cors, {
+    allowedHeaders: ["Accept", "Content-Type"],
     origin: config.corsOrigin,
-    credentials: true
+    credentials: true,
+    methods: ["GET", "HEAD", "POST", "PATCH", "OPTIONS"]
   });
   await app.register(cookie, {
     secret: config.sessionSecret

@@ -873,14 +873,24 @@ export function registerAdminRoutes(app: FastifyInstance) {
   });
 
   app.patch("/api/admin/reports/:reportId/review", adminOnly, async (request, reply) => {
+    request.log.info(
+      { adminUserId: request.authUser?.id, reportId: (request.params as { reportId?: string }).reportId },
+      "Admin report review update requested"
+    );
+
     const parsedParams = reportParamsSchema.safeParse(request.params);
     const parsedBody = reportReviewSchema.safeParse(request.body);
 
     if (!parsedParams.success) {
+      request.log.warn({ issues: parsedParams.error.issues }, "Admin report review id validation failed");
       return sendError(reply, 400, "VALIDATION_FAILED", "Invalid report id.", parsedParams.error.issues);
     }
 
     if (!parsedBody.success) {
+      request.log.warn(
+        { issues: parsedBody.error.issues, reportId: parsedParams.data.reportId },
+        "Admin report review body validation failed"
+      );
       return sendError(reply, 400, "VALIDATION_FAILED", "Invalid report review status.", parsedBody.error.issues);
     }
 
@@ -907,9 +917,14 @@ export function registerAdminRoutes(app: FastifyInstance) {
       return sendOk(reply, { report: toAdminReport(report) });
     } catch (error) {
       if (isRecordNotFound(error)) {
+        request.log.warn({ reportId: parsedParams.data.reportId }, "Admin report review target not found");
         return sendError(reply, 404, "NOT_FOUND", "Report not found.");
       }
 
+      request.log.error(
+        { adminUserId: request.authUser?.id, error, reportId: parsedParams.data.reportId },
+        "Admin report review update failed"
+      );
       throw error;
     }
   });
@@ -1014,14 +1029,24 @@ export function registerAdminRoutes(app: FastifyInstance) {
   });
 
   app.patch("/api/admin/categories/:categoryId", adminOnly, async (request, reply) => {
+    request.log.info(
+      { adminUserId: request.authUser?.id, categoryId: (request.params as { categoryId?: string }).categoryId },
+      "Admin category update requested"
+    );
+
     const parsedParams = categoryParamsSchema.safeParse(request.params);
     const parsedBody = categoryUpdateSchema.safeParse(request.body);
 
     if (!parsedParams.success) {
+      request.log.warn({ issues: parsedParams.error.issues }, "Admin category id validation failed");
       return sendError(reply, 400, "VALIDATION_FAILED", "Invalid category id.", parsedParams.error.issues);
     }
 
     if (!parsedBody.success) {
+      request.log.warn(
+        { categoryId: parsedParams.data.categoryId, issues: parsedBody.error.issues },
+        "Admin category body validation failed"
+      );
       return sendError(reply, 400, "VALIDATION_FAILED", "Invalid category fields.", parsedBody.error.issues);
     }
 
@@ -1043,14 +1068,32 @@ export function registerAdminRoutes(app: FastifyInstance) {
         where: { id: parsedParams.data.categoryId }
       });
 
-      request.log.info({ adminUserId: request.authUser?.id, categoryId: category.id }, "Admin category updated");
+      request.log.info(
+        {
+          adminUserId: request.authUser?.id,
+          categoryId: category.id,
+          isActive: category.isActive,
+          sortOrder: category.sortOrder
+        },
+        "Admin category updated"
+      );
 
       return sendOk(reply, { category: toAdminCategory(category) });
     } catch (error) {
       if (isUniqueConflict(error)) {
+        request.log.warn({ categoryId: parsedParams.data.categoryId }, "Admin category update slug conflict");
         return sendError(reply, 409, "CONFLICT", "A category with this slug already exists.");
       }
 
+      if (isRecordNotFound(error)) {
+        request.log.warn({ categoryId: parsedParams.data.categoryId }, "Admin category update target not found");
+        return sendError(reply, 404, "NOT_FOUND", "Category not found.");
+      }
+
+      request.log.error(
+        { adminUserId: request.authUser?.id, categoryId: parsedParams.data.categoryId, error },
+        "Admin category update failed"
+      );
       throw error;
     }
   });
