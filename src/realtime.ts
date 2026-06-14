@@ -53,6 +53,7 @@ const chatMessageSchema = z.object({
 });
 
 const playbackSetSchema = z.object({
+  actionType: z.enum(["jump_backward", "jump_forward", "pause", "play", "seek"]).optional(),
   positionSeconds: z.coerce.number().min(0),
   requestId: z.string().optional(),
   roomId: z.string().min(1),
@@ -162,6 +163,23 @@ function getPlayback(roomId: string): PlaybackState {
   };
   playbackByRoom.set(roomId, playback);
   return playback;
+}
+
+function inferPlaybackAction(
+  nextPlayback: PlaybackState,
+  previousPlayback: PlaybackState
+): "jump_backward" | "jump_forward" | "pause" | "play" | "seek" {
+  const positionDeltaSeconds = nextPlayback.positionSeconds - previousPlayback.positionSeconds;
+
+  if (nextPlayback.status !== previousPlayback.status) {
+    return nextPlayback.status === "playing" ? "play" : "pause";
+  }
+
+  if (Math.abs(positionDeltaSeconds) > 1.5) {
+    return positionDeltaSeconds < 0 ? "jump_backward" : "jump_forward";
+  }
+
+  return "seek";
 }
 
 async function emitPresence(io: SocketIOServer, roomId: string) {
@@ -449,17 +467,26 @@ export function attachRealtimeServer(server: HttpServer, config: RuntimeConfig):
         return;
       }
 
+      const previousPlayback = getPlayback(parsed.data.roomId);
       const playback = {
         positionSeconds: parsed.data.positionSeconds,
         sourceTime: parsed.data.sourceTime ?? new Date().toISOString(),
         status: parsed.data.status,
         updatedAt: new Date().toISOString()
       };
+      const actionType = parsed.data.actionType ?? inferPlaybackAction(playback, previousPlayback);
+      const positionDeltaSeconds = playback.positionSeconds - previousPlayback.positionSeconds;
       playbackByRoom.set(parsed.data.roomId, playback);
 
-      console.info("[realtime] Playback state updated", {
+      console.info("[realtime] Playback control accepted", {
+        actionType,
+        positionDeltaSeconds,
         positionSeconds: playback.positionSeconds,
+        previousPositionSeconds: previousPlayback.positionSeconds,
+        previousStatus: previousPlayback.status,
+        requestId: parsed.data.requestId,
         roomId: parsed.data.roomId,
+        socketId: roomSocket.id,
         status: playback.status,
         updatedByUserId: roomSocket.data.authUser.id
       });
