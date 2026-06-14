@@ -400,6 +400,10 @@ export function attachRealtimeServer(server: HttpServer, config: RuntimeConfig):
       const parsed = playbackSetSchema.safeParse(payload);
 
       if (!parsed.success) {
+        console.warn("[realtime] Playback state rejected by validation", {
+          issues: parsed.error.issues,
+          userId: roomSocket.data.authUser.id
+        });
         acknowledge(callback, {
           error: { code: "VALIDATION_FAILED", message: "Invalid playback payload." },
           ok: false
@@ -411,6 +415,10 @@ export function attachRealtimeServer(server: HttpServer, config: RuntimeConfig):
       const participant = await findActiveParticipant(parsed.data.roomId, roomSocket.data.authUser.id);
 
       if (!room || room.state !== "live") {
+        console.warn("[realtime] Playback state rejected because room is not live", {
+          roomId: parsed.data.roomId,
+          userId: roomSocket.data.authUser.id
+        });
         acknowledge(callback, {
           error: { code: "ROOM_NOT_LIVE", message: "Playback cannot change because the room is not live." },
           ok: false,
@@ -420,6 +428,10 @@ export function attachRealtimeServer(server: HttpServer, config: RuntimeConfig):
       }
 
       if (!participant || participant.role !== "host") {
+        console.warn("[realtime] Playback state rejected because user is not host", {
+          roomId: parsed.data.roomId,
+          userId: roomSocket.data.authUser.id
+        });
         roomSocket.emit(
           "access.feedback",
           envelope({
@@ -444,6 +456,13 @@ export function attachRealtimeServer(server: HttpServer, config: RuntimeConfig):
         updatedAt: new Date().toISOString()
       };
       playbackByRoom.set(parsed.data.roomId, playback);
+
+      console.info("[realtime] Playback state updated", {
+        positionSeconds: playback.positionSeconds,
+        roomId: parsed.data.roomId,
+        status: playback.status,
+        updatedByUserId: roomSocket.data.authUser.id
+      });
 
       realtime.to(roomChannel(parsed.data.roomId)).emit(
         "playback.state.updated",
