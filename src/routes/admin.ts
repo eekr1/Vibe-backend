@@ -102,6 +102,10 @@ function isRecordNotFound(error: unknown) {
   );
 }
 
+function isAdminBootstrapAllowedAfterAdminExists() {
+  return process.env.ADMIN_BOOTSTRAP_ALLOW_AFTER_ADMIN_EXISTS === "true";
+}
+
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply) {
   if (!request.authUser) {
     return sendError(reply, 401, "AUTH_REQUIRED", "Log in to continue.");
@@ -326,6 +330,26 @@ export function registerAdminRoutes(app: FastifyInstance) {
       return sendError(reply, 404, "NOT_FOUND", "Admin bootstrap is not available.");
     }
 
+    const existingAdminCount = await prisma.user.count({
+      where: {
+        accountState: "active",
+        role: "admin"
+      }
+    });
+
+    if (existingAdminCount > 0 && !isAdminBootstrapAllowedAfterAdminExists()) {
+      request.log.warn(
+        { existingAdminCount },
+        "Admin bootstrap blocked because at least one active admin already exists"
+      );
+      return sendError(
+        reply,
+        409,
+        "CONFLICT",
+        "Admin bootstrap is locked because an active admin already exists. Rotate or temporarily allow bootstrap intentionally if recovery is needed."
+      );
+    }
+
     const parsed = adminBootstrapSchema.safeParse(request.body);
 
     if (!parsed.success) {
@@ -369,7 +393,10 @@ export function registerAdminRoutes(app: FastifyInstance) {
       where: { id: user.id }
     });
 
-    request.log.info({ userId: adminUser.id }, "Admin bootstrap completed");
+    request.log.info(
+      { existingAdminCount, userId: adminUser.id },
+      "Admin bootstrap completed"
+    );
 
     return sendOk(reply, { user: toAdminUser(adminUser) });
   });
@@ -630,6 +657,40 @@ export function registerAdminRoutes(app: FastifyInstance) {
       return sendError(reply, 409, "INVALID_ROOM_STATE", "Admins cannot restrict their own active session.");
     }
 
+    const targetUser = await prisma.user.findUnique({
+      select: {
+        accountState: true,
+        id: true,
+        role: true
+      },
+      where: { id: parsedParams.data.userId }
+    });
+
+    if (!targetUser) {
+      return sendError(reply, 404, "NOT_FOUND", "User not found.");
+    }
+
+    if (
+      targetUser.role === "admin" &&
+      targetUser.accountState === "active" &&
+      parsedBody.data.accountState !== "active"
+    ) {
+      const activeAdminCount = await prisma.user.count({
+        where: {
+          accountState: "active",
+          role: "admin"
+        }
+      });
+
+      if (activeAdminCount <= 1) {
+        request.log.warn(
+          { adminUserId: request.authUser?.id, targetUserId: targetUser.id },
+          "Admin account state update blocked because it would disable the last active admin"
+        );
+        return sendError(reply, 409, "CONFLICT", "The last active admin cannot be restricted, suspended, or banned.");
+      }
+    }
+
     try {
       const user = await prisma.user.update({
         data: {
@@ -867,9 +928,77 @@ export function registerAdminRoutes(app: FastifyInstance) {
       return sendError(reply, 404, "NOT_FOUND", "Report not found.");
     }
 
-    request.log.info({ reportId: report.id }, "Admin report detail loaded");
+    const [relatedReports, relatedRoomReports, relatedModerationActions] = await Promise.all([
+      prisma.report.findMany({
+        include: {
+          message: true,
+          reporter: true,
+          room: true,
+          targetUser: true
+        },
+        orderBy: { createdAt: "desc" },
+        take: 8,
+        where: {
+          id: { not: report.id },
+          targetId: report.targetId,
+          targetType: report.targetType
+        }
+      }),
+      report.roomId
+        ? prisma.report.findMany({
+            include: {
+              message: true,
+              reporter: true,
+              room: true,
+              targetUser: true
+            },
+            orderBy: { createdAt: "desc" },
+            take: 8,
+            where: {
+              id: { not: report.id },
+              roomId: report.roomId
+            }
+          })
+        : Promise.resolve([]),
+      report.roomId
+        ? prisma.moderationAction.findMany({
+            include: {
+              actor: true,
+              room: true,
+              target: true
+            },
+            orderBy: { createdAt: "desc" },
+            take: 8,
+            where: {
+              OR: [
+                { roomId: report.roomId },
+                ...(report.targetUserId ? [{ targetUserId: report.targetUserId }] : [])
+              ]
+            }
+          })
+        : Promise.resolve([])
+    ]);
 
-    return sendOk(reply, { report: toAdminReport(report) });
+    request.log.info(
+      {
+        adminUserId: request.authUser?.id,
+        relatedModerationActions: relatedModerationActions.length,
+        relatedReports: relatedReports.length,
+        relatedRoomReports: relatedRoomReports.length,
+        reportId: report.id,
+        targetType: report.targetType
+      },
+      "Admin report detail loaded"
+    );
+
+    return sendOk(reply, {
+      context: {
+        relatedModerationActions: relatedModerationActions.map(toAdminModerationAction),
+        relatedReports: relatedReports.map(toAdminReport),
+        relatedRoomReports: relatedRoomReports.map(toAdminReport)
+      },
+      report: toAdminReport(report)
+    });
   });
 
   app.patch("/api/admin/reports/:reportId/review", adminOnly, async (request, reply) => {
