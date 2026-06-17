@@ -43,7 +43,8 @@ function readCorsOrigin(): string[] {
 }
 
 function readEmailProvider(): RuntimeConfig["emailProvider"] {
-  const value = process.env.EMAIL_PROVIDER ?? "console";
+  const rawValue = process.env.EMAIL_PROVIDER?.trim().replace(/^["']|["']$/g, "").toLowerCase();
+  const value = rawValue || (process.env.BREVO_API_KEY ? "brevo" : "console");
 
   if (value === "console" || value === "brevo") {
     return value;
@@ -84,8 +85,10 @@ export function loadConfig(): RuntimeConfig {
 
 export function toSafeConfig(config: RuntimeConfig) {
   return {
+    brevoApiKeyConfigured: Boolean(config.brevoApiKey),
     corsOrigin: config.corsOrigin,
     databaseConfigured: Boolean(config.databaseUrl),
+    emailFromConfigured: Boolean(config.emailFrom),
     emailProvider: config.emailProvider,
     frontendUrlConfigured: Boolean(config.frontendUrl),
     logLevel: config.logLevel,

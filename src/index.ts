@@ -1,5 +1,5 @@
 import { buildServer } from "./app.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, toSafeConfig } from "./config.js";
 import { attachRealtimeServer } from "./realtime.js";
 
 const config = loadConfig();
@@ -25,6 +25,7 @@ try {
 
   app.log.info(
     {
+      config: toSafeConfig(config),
       env: config.nodeEnv,
       port: config.port,
       realtimeNamespace: "/realtime"
