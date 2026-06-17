@@ -100,6 +100,7 @@ model User {
   displayName                  String
   avatarUrl                    String?
   passwordHash                 String
+  passwordResetTokens          PasswordResetToken[]
   accountState                 AccountState       @default(active)
   role                         UserRole           @default(member)
   createdAt                    DateTime           @default(now())
@@ -281,4 +282,18 @@ model PlatformContentAudit {
   @@index([contentId, createdAt])
   @@index([actorUserId, createdAt])
   @@map("platform_content_audits")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  usedAt    DateTime?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([userId, createdAt])
+  @@map("password_reset_tokens")
 }

@@ -12,6 +12,13 @@ import {
   toAuthUser,
   verifyPassword
 } from "../auth/auth-service.js";
+import {
+  createPasswordResetExpiresAt,
+  createPasswordResetToken,
+  createPasswordResetUrl,
+  hashPasswordResetToken,
+  sendPasswordResetEmail
+} from "../auth/password-reset-service.js";
 
 const signupSchema = z.object({
   displayName: z.string().trim().min(2).max(48),
@@ -29,6 +36,15 @@ const signupSchema = z.object({
 const loginSchema = z.object({
   emailOrUsername: z.string().trim().min(3).max(120),
   password: z.string().min(1).max(128)
+});
+
+const passwordResetRequestSchema = z.object({
+  email: z.email().trim().toLowerCase()
+});
+
+const passwordResetConfirmSchema = z.object({
+  password: z.string().min(8).max(128),
+  token: z.string().trim().min(24).max(256)
 });
 
 function setSessionCookie(reply: FastifyReply, token: string, config: RuntimeConfig) {
@@ -133,6 +149,103 @@ export function registerAuthRoutes(app: FastifyInstance, config: RuntimeConfig) 
     request.log.info({ userId: user.id }, "Login completed");
 
     return sendOk(reply, { user: toAuthUser(user) });
+  });
+
+  app.post("/api/auth/password-reset/request", async (request, reply) => {
+    const parsed = passwordResetRequestSchema.safeParse(request.body);
+
+    if (!parsed.success) {
+      request.log.warn({ issues: parsed.error.issues }, "Password reset request validation failed");
+      return sendError(reply, 400, "VALIDATION_FAILED", "Enter a valid email address.", parsed.error.issues);
+    }
+
+    const safeResponse = {
+      message: "If an account exists for that email, a password reset link will be sent."
+    };
+
+    const user = await prisma.user.findUnique({
+      where: { email: parsed.data.email }
+    });
+
+    if (!user) {
+      request.log.info({ email: parsed.data.email }, "Password reset requested for unknown email");
+      return sendOk(reply, safeResponse);
+    }
+
+    const { token, tokenHash } = createPasswordResetToken();
+    const expiresAt = createPasswordResetExpiresAt();
+
+    await prisma.passwordResetToken.create({
+      data: {
+        expiresAt,
+        tokenHash,
+        userId: user.id
+      }
+    });
+
+    const resetUrl = createPasswordResetUrl(config, token);
+
+    try {
+      await sendPasswordResetEmail(config, request.log, {
+        email: user.email,
+        resetUrl,
+        username: user.username
+      });
+    } catch {
+      return sendError(reply, 500, "INTERNAL_ERROR", "Password reset email could not be sent.");
+    }
+
+    request.log.info({ userId: user.id }, "Password reset requested");
+    return sendOk(reply, safeResponse);
+  });
+
+  app.post("/api/auth/password-reset/confirm", async (request, reply) => {
+    const parsed = passwordResetConfirmSchema.safeParse(request.body);
+
+    if (!parsed.success) {
+      request.log.warn({ issues: parsed.error.issues }, "Password reset confirm validation failed");
+      return sendError(reply, 400, "VALIDATION_FAILED", "Check the reset fields.", parsed.error.issues);
+    }
+
+    const tokenHash = hashPasswordResetToken(parsed.data.token);
+    const resetToken = await prisma.passwordResetToken.findUnique({
+      include: { user: true },
+      where: { tokenHash }
+    });
+
+    if (!resetToken || resetToken.usedAt || resetToken.expiresAt <= new Date()) {
+      request.log.warn({ tokenFound: Boolean(resetToken) }, "Password reset token invalid");
+      return sendError(reply, 400, "INVALID_RESET_TOKEN", "This reset link is invalid or expired.");
+    }
+
+    const stateError = accountErrorCode(resetToken.user.accountState);
+
+    if (stateError) {
+      return sendError(reply, 403, stateError, "This account cannot currently reset its password.");
+    }
+
+    const passwordHash = await hashPassword(parsed.data.password);
+    await prisma.$transaction([
+      prisma.user.update({
+        data: { passwordHash },
+        where: { id: resetToken.userId }
+      }),
+      prisma.passwordResetToken.update({
+        data: { usedAt: new Date() },
+        where: { id: resetToken.id }
+      }),
+      prisma.passwordResetToken.updateMany({
+        data: { usedAt: new Date() },
+        where: {
+          id: { not: resetToken.id },
+          usedAt: null,
+          userId: resetToken.userId
+        }
+      })
+    ]);
+
+    request.log.info({ userId: resetToken.userId }, "Password reset completed");
+    return sendOk(reply, { reset: true });
   });
 
   app.post("/api/auth/logout", async (_request, reply) => {

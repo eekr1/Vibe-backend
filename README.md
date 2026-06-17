@@ -51,8 +51,15 @@ Required in production:
 - `PORT` from Render, usually provided automatically.
 - `LOG_LEVEL=info`
 - `CORS_ORIGIN=https://your-frontend.onrender.com`
+- `FRONTEND_URL=https://your-frontend.onrender.com`
 - `DATABASE_URL=postgresql://...`
 - `SESSION_SECRET=<strong generated secret>`
+
+Password reset email variables:
+- `EMAIL_PROVIDER=console` logs reset links for local/staging debug.
+- `EMAIL_PROVIDER=brevo` sends reset emails through Brevo.
+- `EMAIL_FROM=Vibehall <noreply@your-domain.com>`
+- `BREVO_API_KEY=<brevo-api-key>` is required only when `EMAIL_PROVIDER=brevo`.
 
 Admin bootstrap variables:
 - `ADMIN_BOOTSTRAP_SECRET` should normally be unset after the intended admin account exists.
