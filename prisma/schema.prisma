@@ -82,6 +82,17 @@ enum ReportStatus {
   escalated
 }
 
+enum PlatformContentStatus {
+  draft
+  published
+}
+
+enum PlatformContentAuditAction {
+  draft_saved
+  published
+  unpublished
+}
+
 model User {
   id                           String             @id @default(cuid())
   email                        String             @unique
@@ -98,6 +109,9 @@ model User {
   moderationActionsAuthored    ModerationAction[] @relation("moderation_action_actor")
   moderationActionsReceived    ModerationAction[] @relation("moderation_action_target")
   participants                 RoomParticipant[]
+  platformContentAudits        PlatformContentAudit[]
+  platformContentDraftEdits    PlatformContent[]      @relation("platform_content_last_editor")
+  platformContentPublishes     PlatformContent[]      @relation("platform_content_last_publisher")
   reportsMade                  Report[]           @relation("report_reporter")
   reportsTargetingUser         Report[]           @relation("report_target_user")
 
@@ -230,4 +244,41 @@ model Report {
   @@index([targetType, targetId])
   @@index([targetUserId, createdAt])
   @@map("reports")
+}
+
+model PlatformContent {
+  id                  String                 @id @default(cuid())
+  pageKey             String                 @unique
+  title               String
+  draftBody           String
+  publishedTitle      String?
+  publishedBody       String?
+  status              PlatformContentStatus  @default(draft)
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  draftUpdatedAt      DateTime?
+  publishedAt         DateTime?
+  lastEditorUserId    String?
+  lastPublisherUserId String?
+  audits              PlatformContentAudit[]
+  lastEditor          User?                  @relation("platform_content_last_editor", fields: [lastEditorUserId], references: [id], onDelete: SetNull)
+  lastPublisher       User?                  @relation("platform_content_last_publisher", fields: [lastPublisherUserId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@map("platform_content")
+}
+
+model PlatformContentAudit {
+  id        String                     @id @default(cuid())
+  contentId String
+  actorUserId String
+  actionType PlatformContentAuditAction
+  metadata  String?
+  createdAt DateTime                   @default(now())
+  actor     User                       @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+  content   PlatformContent            @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@index([contentId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@map("platform_content_audits")
 }

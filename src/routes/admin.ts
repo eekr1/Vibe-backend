@@ -48,6 +48,10 @@ const categoryParamsSchema = z.object({
   categoryId: z.string().trim().min(1)
 });
 
+const platformContentParamsSchema = z.object({
+  pageKey: z.enum(["terms", "privacy", "community-guidelines", "support"])
+});
+
 const userRestrictionSchema = z.object({
   accountState: z.enum(["active", "restricted", "suspended", "banned"])
 });
@@ -68,6 +72,11 @@ const categoryUpdateSchema = z.object({
   name: z.string().trim().min(2).max(64).optional(),
   slug: z.string().trim().min(2).max(80).optional(),
   sortOrder: z.coerce.number().int().min(0).max(9999).optional()
+});
+
+const platformContentDraftSchema = z.object({
+  draftBody: z.string().trim().min(20).max(20000),
+  title: z.string().trim().min(2).max(120)
 });
 
 function compactSearch(search?: string) {
@@ -145,6 +154,54 @@ function toAdminCategory(category: {
     slug: category.slug,
     sortOrder: category.sortOrder,
     updatedAt: category.updatedAt.toISOString()
+  };
+}
+
+function toAdminPlatformContent(content: {
+  createdAt: Date;
+  draftBody: string;
+  draftUpdatedAt: Date | null;
+  id: string;
+  lastEditor?: { displayName: string; id: string; username: string } | null;
+  lastPublisher?: { displayName: string; id: string; username: string } | null;
+  pageKey: string;
+  publishedAt: Date | null;
+  publishedBody: string | null;
+  publishedTitle: string | null;
+  status: string;
+  title: string;
+  updatedAt: Date;
+}) {
+  return {
+    createdAt: content.createdAt.toISOString(),
+    draftBody: content.draftBody,
+    draftUpdatedAt: content.draftUpdatedAt ? content.draftUpdatedAt.toISOString() : null,
+    id: content.id,
+    lastEditor: content.lastEditor ? userSummary({ ...content.lastEditor, avatarUrl: null }) : null,
+    lastPublisher: content.lastPublisher ? userSummary({ ...content.lastPublisher, avatarUrl: null }) : null,
+    pageKey: content.pageKey,
+    publishedAt: content.publishedAt ? content.publishedAt.toISOString() : null,
+    publishedBody: content.publishedBody,
+    publishedTitle: content.publishedTitle,
+    status: content.status,
+    title: content.title,
+    updatedAt: content.updatedAt.toISOString()
+  };
+}
+
+function toAdminPlatformContentAudit(audit: {
+  actionType: string;
+  actor: { avatarUrl: string | null; displayName: string; id: string; username: string };
+  createdAt: Date;
+  id: string;
+  metadata: string | null;
+}) {
+  return {
+    actionType: audit.actionType,
+    actor: userSummary(audit.actor),
+    createdAt: audit.createdAt.toISOString(),
+    id: audit.id,
+    metadata: audit.metadata
   };
 }
 
@@ -1097,6 +1154,230 @@ export function registerAdminRoutes(app: FastifyInstance) {
         actionType: parsed.data.actionType ?? null,
         search: search ?? ""
       }
+    });
+  });
+
+  app.get("/api/admin/platform-content", adminOnly, async (request, reply) => {
+    const contents = await prisma.platformContent.findMany({
+      include: {
+        lastEditor: {
+          select: {
+            displayName: true,
+            id: true,
+            username: true
+          }
+        },
+        lastPublisher: {
+          select: {
+            displayName: true,
+            id: true,
+            username: true
+          }
+        }
+      },
+      orderBy: { pageKey: "asc" }
+    });
+
+    request.log.info({ adminUserId: request.authUser?.id, count: contents.length }, "Admin platform content listed");
+
+    return sendOk(reply, { contents: contents.map(toAdminPlatformContent) });
+  });
+
+  app.get("/api/admin/platform-content/:pageKey", adminOnly, async (request, reply) => {
+    const parsed = platformContentParamsSchema.safeParse(request.params);
+
+    if (!parsed.success) {
+      return sendError(reply, 400, "VALIDATION_FAILED", "Invalid content page.", parsed.error.issues);
+    }
+
+    const content = await prisma.platformContent.findUnique({
+      include: {
+        audits: {
+          include: {
+            actor: true
+          },
+          orderBy: { createdAt: "desc" },
+          take: 20
+        },
+        lastEditor: {
+          select: {
+            displayName: true,
+            id: true,
+            username: true
+          }
+        },
+        lastPublisher: {
+          select: {
+            displayName: true,
+            id: true,
+            username: true
+          }
+        }
+      },
+      where: { pageKey: parsed.data.pageKey }
+    });
+
+    if (!content) {
+      return sendError(reply, 404, "NOT_FOUND", "Platform content page not found.");
+    }
+
+    request.log.info(
+      { adminUserId: request.authUser?.id, pageKey: content.pageKey },
+      "Admin platform content detail loaded"
+    );
+
+    return sendOk(reply, {
+      audits: content.audits.map(toAdminPlatformContentAudit),
+      content: toAdminPlatformContent(content)
+    });
+  });
+
+  app.patch("/api/admin/platform-content/:pageKey/draft", adminOnly, async (request, reply) => {
+    const parsedParams = platformContentParamsSchema.safeParse(request.params);
+    const parsedBody = platformContentDraftSchema.safeParse(request.body);
+
+    if (!parsedParams.success) {
+      return sendError(reply, 400, "VALIDATION_FAILED", "Invalid content page.", parsedParams.error.issues);
+    }
+
+    if (!parsedBody.success) {
+      return sendError(reply, 400, "VALIDATION_FAILED", "Invalid content draft.", parsedBody.error.issues);
+    }
+
+    const content = await prisma.platformContent.findUnique({
+      select: {
+        id: true,
+        pageKey: true
+      },
+      where: { pageKey: parsedParams.data.pageKey }
+    });
+
+    if (!content) {
+      return sendError(reply, 404, "NOT_FOUND", "Platform content page not found.");
+    }
+
+    const now = new Date();
+    const updatedContent = await prisma.platformContent.update({
+      data: {
+        audits: {
+          create: {
+            actionType: "draft_saved",
+            actorUserId: request.authUser!.id,
+            metadata: JSON.stringify({
+              title: parsedBody.data.title
+            })
+          }
+        },
+        draftBody: parsedBody.data.draftBody,
+        draftUpdatedAt: now,
+        lastEditorUserId: request.authUser!.id,
+        title: parsedBody.data.title
+      },
+      include: {
+        audits: {
+          include: { actor: true },
+          orderBy: { createdAt: "desc" },
+          take: 20
+        },
+        lastEditor: {
+          select: {
+            displayName: true,
+            id: true,
+            username: true
+          }
+        },
+        lastPublisher: {
+          select: {
+            displayName: true,
+            id: true,
+            username: true
+          }
+        }
+      },
+      where: { id: content.id }
+    });
+
+    request.log.info(
+      { adminUserId: request.authUser?.id, pageKey: updatedContent.pageKey },
+      "Admin platform content draft saved"
+    );
+
+    return sendOk(reply, {
+      audits: updatedContent.audits.map(toAdminPlatformContentAudit),
+      content: toAdminPlatformContent(updatedContent)
+    });
+  });
+
+  app.post("/api/admin/platform-content/:pageKey/publish", adminOnly, async (request, reply) => {
+    const parsed = platformContentParamsSchema.safeParse(request.params);
+
+    if (!parsed.success) {
+      return sendError(reply, 400, "VALIDATION_FAILED", "Invalid content page.", parsed.error.issues);
+    }
+
+    const content = await prisma.platformContent.findUnique({
+      select: {
+        draftBody: true,
+        id: true,
+        pageKey: true,
+        title: true
+      },
+      where: { pageKey: parsed.data.pageKey }
+    });
+
+    if (!content) {
+      return sendError(reply, 404, "NOT_FOUND", "Platform content page not found.");
+    }
+
+    const updatedContent = await prisma.platformContent.update({
+      data: {
+        audits: {
+          create: {
+            actionType: "published",
+            actorUserId: request.authUser!.id,
+            metadata: JSON.stringify({
+              title: content.title
+            })
+          }
+        },
+        lastPublisherUserId: request.authUser!.id,
+        publishedAt: new Date(),
+        publishedBody: content.draftBody,
+        publishedTitle: content.title,
+        status: "published"
+      },
+      include: {
+        audits: {
+          include: { actor: true },
+          orderBy: { createdAt: "desc" },
+          take: 20
+        },
+        lastEditor: {
+          select: {
+            displayName: true,
+            id: true,
+            username: true
+          }
+        },
+        lastPublisher: {
+          select: {
+            displayName: true,
+            id: true,
+            username: true
+          }
+        }
+      },
+      where: { id: content.id }
+    });
+
+    request.log.info(
+      { adminUserId: request.authUser?.id, pageKey: updatedContent.pageKey },
+      "Admin platform content published"
+    );
+
+    return sendOk(reply, {
+      audits: updatedContent.audits.map(toAdminPlatformContentAudit),
+      content: toAdminPlatformContent(updatedContent)
     });
   });
 

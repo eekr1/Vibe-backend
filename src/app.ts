@@ -6,6 +6,7 @@ import { registerAuthPlugin } from "./auth/auth-plugin.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerCategoryRoutes } from "./routes/categories.js";
+import { registerContentRoutes } from "./routes/content.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerModerationRoutes } from "./routes/moderation.js";
 import { registerRoomRoutes } from "./routes/rooms.js";
@@ -63,6 +64,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   registerAuthRoutes(app, config);
   registerUserRoutes(app);
   registerCategoryRoutes(app);
+  registerContentRoutes(app);
   registerRoomRoutes(app, config);
   registerModerationRoutes(app);
   registerAdminRoutes(app);
