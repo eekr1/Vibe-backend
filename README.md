@@ -65,10 +65,12 @@ Recommended backend Render settings:
 - Build Command: `npm install && npm run render:build`
 - Production Start Command: `npm run render:start:production`
 - Staging Convenience Start Command: `npm run render:start:staging`
+- Default Start Command: `npm start` also runs the staging preparation helper for the current staging database setup.
 
 Production note:
 - `render:start:production` runs `prisma migrate deploy` before starting the server.
 - `render:start:staging` runs the legacy `db push` based preparation helper and is only for temporary staging convenience.
+- `npm start` and `render:start` intentionally point to `render:start:staging` while the current Render database is still staging-style.
 - Do not point a real production service at `render:start:staging`.
 
 Existing staging database note:

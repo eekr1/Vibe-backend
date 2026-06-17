@@ -14,10 +14,10 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:seed": "tsx prisma/seed.ts",
     "render:build": "prisma generate && tsc -p tsconfig.json",
-    "render:start": "node dist/index.js",
+    "render:start": "npm run render:start:staging",
     "render:start:production": "npm run prisma:migrate:deploy && node dist/index.js",
     "render:start:staging": "npm run db:prepare:staging && node dist/index.js",
-    "start": "node dist/index.js",
+    "start": "npm run render:start:staging",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
