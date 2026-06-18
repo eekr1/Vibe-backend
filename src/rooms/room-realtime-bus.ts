@@ -29,7 +29,7 @@ type ParticipantLeftPayload = {
 type RoomEndedPayload = {
   endedAt: string;
   endedByUserId: string;
-  reason: "host_closed" | "host_left" | "system_cleanup";
+  reason: "admin_action" | "host_closed" | "host_left" | "system_cleanup";
   roomId: string;
 };
 

@@ -82,6 +82,23 @@ enum ReportStatus {
   escalated
 }
 
+enum AdminActionType {
+  account_restricted
+  account_suspended
+  account_banned
+  account_restored
+  message_hidden
+  message_deleted
+  room_ended
+  room_deleted
+}
+
+enum AdminActionTargetType {
+  user
+  message
+  room
+}
+
 enum PlatformContentStatus {
   draft
   published
@@ -109,6 +126,7 @@ model User {
   messages                     Message[]
   moderationActionsAuthored    ModerationAction[] @relation("moderation_action_actor")
   moderationActionsReceived    ModerationAction[] @relation("moderation_action_target")
+  adminActionLogs              AdminActionLog[]   @relation("admin_action_actor")
   participants                 RoomParticipant[]
   platformContentAudits        PlatformContentAudit[]
   platformContentDraftEdits    PlatformContent[]      @relation("platform_content_last_editor")
@@ -233,6 +251,7 @@ model Report {
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
   reviewedAt     DateTime?
+  adminActionLogs AdminActionLog[]
   message        Message?         @relation(fields: [messageId], references: [id])
   reporter       User             @relation("report_reporter", fields: [reporterUserId], references: [id])
   room           Room?            @relation(fields: [roomId], references: [id])
@@ -245,6 +264,26 @@ model Report {
   @@index([targetType, targetId])
   @@index([targetUserId, createdAt])
   @@map("reports")
+}
+
+model AdminActionLog {
+  id          String                @id @default(cuid())
+  actorUserId String
+  reportId    String?
+  targetType  AdminActionTargetType
+  targetId    String
+  actionType  AdminActionType
+  reason      String?
+  metadata    String?
+  createdAt   DateTime              @default(now())
+  actor       User                  @relation("admin_action_actor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  report      Report?               @relation(fields: [reportId], references: [id], onDelete: SetNull)
+
+  @@index([actorUserId, createdAt])
+  @@index([reportId, createdAt])
+  @@index([targetType, targetId, createdAt])
+  @@index([actionType, createdAt])
+  @@map("admin_action_logs")
 }
 
 model PlatformContent {
