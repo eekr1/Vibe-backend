@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../db/prisma.js";
 import { sendError, sendOk } from "../lib/http.js";
+import { createRateLimiter, enforceRateLimit } from "../lib/rate-limit.js";
 import { toModerationActionResponse, toReportResponse } from "../moderation/moderation-presenter.js";
 import { roomRealtimeBus } from "../rooms/room-realtime-bus.js";
 
@@ -30,6 +31,12 @@ const reportCreateSchema = z.object({
   roomId: z.string().trim().min(1).optional(),
   targetId: z.string().trim().min(1),
   targetType: z.enum(["room", "user", "message"])
+});
+
+const reportCreateRateLimiter = createRateLimiter({
+  limit: 10,
+  name: "report.create",
+  windowMs: 10 * 60 * 1000
 });
 
 async function findRoom(roomId: string) {
@@ -166,6 +173,18 @@ export function registerModerationRoutes(app: FastifyInstance) {
 
     if (!request.authUser) {
       return sendError(reply, 401, "AUTH_REQUIRED", "Log in to continue.");
+    }
+
+    if (
+      enforceRateLimit(
+        request,
+        reply,
+        reportCreateRateLimiter,
+        request.authUser.id,
+        "Too many reports submitted too quickly. Please wait a bit before sending another report."
+      )
+    ) {
+      return reply;
     }
 
     let roomId: string | null = parsed.data.roomId ?? null;

@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { prisma } from "../db/prisma.js";
 import { sendError, sendOk } from "../lib/http.js";
+import { createRateLimiter, enforceRateLimit, getRateLimitIdentity } from "../lib/rate-limit.js";
 
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
@@ -77,6 +78,12 @@ const categoryUpdateSchema = z.object({
 const platformContentDraftSchema = z.object({
   draftBody: z.string().trim().min(20).max(20000),
   title: z.string().trim().min(2).max(120)
+});
+
+const adminBootstrapRateLimiter = createRateLimiter({
+  limit: 5,
+  name: "admin.bootstrap",
+  windowMs: 15 * 60 * 1000
 });
 
 function compactSearch(search?: string) {
@@ -380,6 +387,18 @@ export function registerAdminRoutes(app: FastifyInstance) {
   const adminOnly = { preHandler: [app.authenticate, requireAdmin] };
 
   app.post("/api/admin/bootstrap", async (request, reply) => {
+    if (
+      enforceRateLimit(
+        request,
+        reply,
+        adminBootstrapRateLimiter,
+        getRateLimitIdentity(request),
+        "Too many admin bootstrap attempts. Please wait before trying again."
+      )
+    ) {
+      return reply;
+    }
+
     const configuredSecret = process.env.ADMIN_BOOTSTRAP_SECRET;
 
     if (!configuredSecret) {

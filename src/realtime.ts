@@ -6,6 +6,8 @@ import { findAuthUserById, verifyAuthToken } from "./auth/auth-service.js";
 import { AUTH_COOKIE_NAME, type AuthUser } from "./auth/auth-types.js";
 import type { RuntimeConfig } from "./config.js";
 import { prisma } from "./db/prisma.js";
+import { getMessageSafetyIssue, normalizeSafetyText } from "./lib/input-safety.js";
+import { createRateLimiter } from "./lib/rate-limit.js";
 import { roomRealtimeBus } from "./rooms/room-realtime-bus.js";
 import { toMessageResponse, toParticipantResponse, toRoomResponse } from "./rooms/room-presenter.js";
 
@@ -62,6 +64,12 @@ const playbackSetSchema = z.object({
 });
 
 const playbackByRoom = new Map<string, PlaybackState>();
+const chatMessageRateLimiter = createRateLimiter({
+  limit: 6,
+  name: "realtime.chat.message",
+  windowMs: 10 * 1000
+});
+const recentChatMessages = new Map<string, { body: string; createdAt: number }>();
 
 function envelope<TPayload extends object>(payload: TPayload) {
   return {
@@ -101,6 +109,26 @@ function parseCookies(cookieHeader?: string) {
 
 function emitRealtimeError(socket: RoomSocket, code: string, message: string, requestId?: string) {
   socket.emit("connection.error", envelope({ code, message, requestId }));
+}
+
+function recentChatKey(roomId: string, userId: string) {
+  return `${roomId}:${userId}`;
+}
+
+function isDuplicateRecentChat(roomId: string, userId: string, body: string) {
+  const key = recentChatKey(roomId, userId);
+  const previous = recentChatMessages.get(key);
+  const now = Date.now();
+
+  if (previous && previous.body === body.toLowerCase() && now - previous.createdAt < 30 * 1000) {
+    return true;
+  }
+
+  recentChatMessages.set(key, {
+    body: body.toLowerCase(),
+    createdAt: now
+  });
+  return false;
 }
 
 function acknowledge(
@@ -365,6 +393,47 @@ export function attachRealtimeServer(server: HttpServer, config: RuntimeConfig):
         return;
       }
 
+      const body = normalizeSafetyText(parsed.data.body);
+      const safetyIssue = getMessageSafetyIssue(body);
+
+      if (safetyIssue) {
+        acknowledge(callback, {
+          error: { code: "VALIDATION_FAILED", message: safetyIssue },
+          ok: false,
+          requestId: parsed.data.requestId
+        });
+        return;
+      }
+
+      const rateLimit = chatMessageRateLimiter.check(`${roomSocket.data.authUser.id}:${parsed.data.roomId}`);
+
+      if (!rateLimit.allowed) {
+        console.warn("[realtime] Chat message rejected by rate limit", {
+          retryAfterSeconds: rateLimit.retryAfterSeconds,
+          roomId: parsed.data.roomId,
+          userId: roomSocket.data.authUser.id
+        });
+        acknowledge(callback, {
+          error: { code: "RATE_LIMITED", message: "You are sending messages too quickly. Slow down for a moment." },
+          ok: false,
+          requestId: parsed.data.requestId
+        });
+        return;
+      }
+
+      if (isDuplicateRecentChat(parsed.data.roomId, roomSocket.data.authUser.id, body)) {
+        console.warn("[realtime] Chat message rejected as duplicate", {
+          roomId: parsed.data.roomId,
+          userId: roomSocket.data.authUser.id
+        });
+        acknowledge(callback, {
+          error: { code: "RATE_LIMITED", message: "Avoid repeating the same message too quickly." },
+          ok: false,
+          requestId: parsed.data.requestId
+        });
+        return;
+      }
+
       const room = await findRoom(parsed.data.roomId);
       const participant = await findActiveParticipant(parsed.data.roomId, roomSocket.data.authUser.id);
 
@@ -388,7 +457,7 @@ export function attachRealtimeServer(server: HttpServer, config: RuntimeConfig):
 
       const message = await prisma.message.create({
         data: {
-          body: parsed.data.body,
+          body,
           roomId: parsed.data.roomId,
           userId: roomSocket.data.authUser.id
         },

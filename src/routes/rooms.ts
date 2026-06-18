@@ -8,6 +8,8 @@ import { findAuthUserById, hashPassword, verifyAuthToken, verifyPassword } from 
 import type { RuntimeConfig } from "../config.js";
 import { prisma } from "../db/prisma.js";
 import { sendError, sendOk } from "../lib/http.js";
+import { getMessageSafetyIssue, getRoomTitleSafetyIssue, normalizeSafetyText } from "../lib/input-safety.js";
+import { createRateLimiter, enforceRateLimit, getRateLimitIdentity } from "../lib/rate-limit.js";
 import { parseYouTubeSource } from "../media/youtube.js";
 import { roomRealtimeBus } from "../rooms/room-realtime-bus.js";
 import { toMessageResponse, toParticipantResponse, toRoomResponse } from "../rooms/room-presenter.js";
@@ -72,6 +74,22 @@ const messageQuerySchema = z.object({
 
 const roomParamsSchema = z.object({
   roomId: z.string().trim().min(1)
+});
+
+const roomCreateRateLimiter = createRateLimiter({
+  limit: 6,
+  name: "room.create",
+  windowMs: 15 * 60 * 1000
+});
+const privatePasswordRateLimiter = createRateLimiter({
+  limit: 8,
+  name: "room.private_password",
+  windowMs: 10 * 60 * 1000
+});
+const restMessageRateLimiter = createRateLimiter({
+  limit: 8,
+  name: "room.message.rest",
+  windowMs: 10 * 1000
 });
 
 function slugify(title: string) {
@@ -418,6 +436,25 @@ export function registerRoomRoutes(app: FastifyInstance, config: RuntimeConfig) 
     }
 
     const authUser = request.authUser;
+    const title = normalizeSafetyText(parsed.data.title);
+    const titleSafetyIssue = getRoomTitleSafetyIssue(title);
+
+    if (titleSafetyIssue) {
+      return sendError(reply, 400, "VALIDATION_FAILED", titleSafetyIssue);
+    }
+
+    if (
+      enforceRateLimit(
+        request,
+        reply,
+        roomCreateRateLimiter,
+        authUser.id,
+        "Too many rooms created too quickly. Please wait a bit before launching another room."
+      )
+    ) {
+      return reply;
+    }
+
     const mediaSource = parseYouTubeSource(parsed.data.sourceUrl);
 
     if (!mediaSource) {
@@ -452,12 +489,12 @@ export function registerRoomRoutes(app: FastifyInstance, config: RuntimeConfig) 
           hostUserId: authUser.id,
           participantLimit: parsed.data.participantLimit,
           privatePasswordHash,
-          slug: makeRoomSlug(parsed.data.title),
+          slug: makeRoomSlug(title),
           sourceProvider: mediaSource.provider,
           sourceThumbnailUrl: mediaSource.thumbnailUrl,
           sourceUrl: mediaSource.normalizedUrl,
           sourceVideoId: mediaSource.videoId,
-          title: parsed.data.title,
+          title,
           visibility: parsed.data.visibility
         }
       });
@@ -673,6 +710,18 @@ export function registerRoomRoutes(app: FastifyInstance, config: RuntimeConfig) 
         return sendError(reply, 401, "AUTH_REQUIRED", "Log in to continue.");
       }
 
+      if (
+        enforceRateLimit(
+          request,
+          reply,
+          privatePasswordRateLimiter,
+          `${request.authUser.id}:${parsedParams.data.roomId}`,
+          "Too many private room password attempts. Please wait a bit and try again."
+        )
+      ) {
+        return reply;
+      }
+
       const room = await findRoomForResponse(parsedParams.data.roomId);
 
       if (!room) {
@@ -825,6 +874,25 @@ export function registerRoomRoutes(app: FastifyInstance, config: RuntimeConfig) 
       return sendError(reply, 401, "AUTH_REQUIRED", "Log in to continue.");
     }
 
+    const body = normalizeSafetyText(parsedBody.data.body);
+    const messageSafetyIssue = getMessageSafetyIssue(body);
+
+    if (messageSafetyIssue) {
+      return sendError(reply, 400, "VALIDATION_FAILED", messageSafetyIssue);
+    }
+
+    if (
+      enforceRateLimit(
+        request,
+        reply,
+        restMessageRateLimiter,
+        `${request.authUser.id}:${parsedParams.data.roomId}`,
+        "You are sending messages too quickly. Slow down for a moment."
+      )
+    ) {
+      return reply;
+    }
+
     const room = await findRoomForResponse(parsedParams.data.roomId);
 
     if (!room) {
@@ -843,7 +911,7 @@ export function registerRoomRoutes(app: FastifyInstance, config: RuntimeConfig) 
 
     const message = await prisma.message.create({
       data: {
-        body: parsedBody.data.body,
+        body,
         roomId: room.id,
         userId: request.authUser.id
       },

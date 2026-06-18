@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { RuntimeConfig } from "../config.js";
 import { prisma } from "../db/prisma.js";
 import { sendError, sendOk } from "../lib/http.js";
+import { createRateLimiter, enforceRateLimit, getRateLimitIdentity } from "../lib/rate-limit.js";
 import { AUTH_COOKIE_NAME } from "../auth/auth-types.js";
 import {
   getSessionMaxAgeSeconds,
@@ -45,6 +46,27 @@ const passwordResetRequestSchema = z.object({
 const passwordResetConfirmSchema = z.object({
   password: z.string().min(8).max(128),
   token: z.string().trim().min(24).max(256)
+});
+
+const signupRateLimiter = createRateLimiter({
+  limit: 5,
+  name: "auth.signup",
+  windowMs: 10 * 60 * 1000
+});
+const loginRateLimiter = createRateLimiter({
+  limit: 8,
+  name: "auth.login",
+  windowMs: 5 * 60 * 1000
+});
+const passwordResetRequestRateLimiter = createRateLimiter({
+  limit: 4,
+  name: "auth.password_reset.request",
+  windowMs: 15 * 60 * 1000
+});
+const passwordResetConfirmRateLimiter = createRateLimiter({
+  limit: 8,
+  name: "auth.password_reset.confirm",
+  windowMs: 15 * 60 * 1000
 });
 
 function setSessionCookie(reply: FastifyReply, token: string, config: RuntimeConfig) {
@@ -91,6 +113,18 @@ export function registerAuthRoutes(app: FastifyInstance, config: RuntimeConfig) 
       return sendError(reply, 400, "VALIDATION_FAILED", "Check the signup fields.", parsed.error.issues);
     }
 
+    if (
+      enforceRateLimit(
+        request,
+        reply,
+        signupRateLimiter,
+        getRateLimitIdentity(request),
+        "Too many signup attempts. Please wait a bit and try again."
+      )
+    ) {
+      return reply;
+    }
+
     try {
       const passwordHash = await hashPassword(parsed.data.password);
       const user = await prisma.user.create({
@@ -127,6 +161,19 @@ export function registerAuthRoutes(app: FastifyInstance, config: RuntimeConfig) 
     }
 
     const lookup = parsed.data.emailOrUsername.toLowerCase();
+
+    if (
+      enforceRateLimit(
+        request,
+        reply,
+        loginRateLimiter,
+        `${getRateLimitIdentity(request)}:${lookup}`,
+        "Too many login attempts. Please wait a bit and try again."
+      )
+    ) {
+      return reply;
+    }
+
     const user = await prisma.user.findFirst({
       where: {
         OR: [{ email: lookup }, { username: lookup }]
@@ -162,6 +209,18 @@ export function registerAuthRoutes(app: FastifyInstance, config: RuntimeConfig) 
     const safeResponse = {
       message: "If an account exists for that email, a password reset link will be sent."
     };
+
+    if (
+      enforceRateLimit(
+        request,
+        reply,
+        passwordResetRequestRateLimiter,
+        `${getRateLimitIdentity(request)}:${parsed.data.email}`,
+        "Too many password reset requests. Please wait a bit and try again."
+      )
+    ) {
+      return reply;
+    }
 
     const user = await prisma.user.findUnique({
       where: { email: parsed.data.email }
@@ -205,6 +264,18 @@ export function registerAuthRoutes(app: FastifyInstance, config: RuntimeConfig) 
     if (!parsed.success) {
       request.log.warn({ issues: parsed.error.issues }, "Password reset confirm validation failed");
       return sendError(reply, 400, "VALIDATION_FAILED", "Check the reset fields.", parsed.error.issues);
+    }
+
+    if (
+      enforceRateLimit(
+        request,
+        reply,
+        passwordResetConfirmRateLimiter,
+        getRateLimitIdentity(request),
+        "Too many password reset attempts. Please wait a bit and try again."
+      )
+    ) {
+      return reply;
     }
 
     const tokenHash = hashPasswordResetToken(parsed.data.token);
